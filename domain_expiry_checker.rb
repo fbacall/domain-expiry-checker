@@ -6,6 +6,12 @@ require 'open3'
 
 # DomainExpiryChecker - A tool to check domain expiry dates via WHOIS
 class DomainExpiryChecker
+  # Sentinel value for sorting unknown dates to the end
+  UNKNOWN_DATE_SENTINEL = Date.new(9999, 12, 31)
+
+  # Basic domain name pattern for validation
+  DOMAIN_PATTERN = /\A[a-z0-9]+([\-\.][a-z0-9]+)*\.[a-z]{2,}\z/i.freeze
+
   # Common patterns for expiry date fields in WHOIS output
   EXPIRY_PATTERNS = [
     /Registry Expiry Date:\s*(.+)/i,
@@ -30,6 +36,12 @@ class DomainExpiryChecker
       domain = domain.strip
       next if domain.empty? || domain.start_with?('#')
 
+      # Validate domain format to prevent command injection
+      unless valid_domain?(domain)
+        warn "Warning: Invalid domain format: #{domain}"
+        next
+      end
+
       expiry_date = fetch_expiry_date(domain)
       @results << { domain: domain, expiry_date: expiry_date }
     end
@@ -38,6 +50,10 @@ class DomainExpiryChecker
   end
 
   private
+
+  def valid_domain?(domain)
+    domain.match?(DOMAIN_PATTERN)
+  end
 
   def fetch_expiry_date(domain)
     stdout, stderr, status = Open3.capture3('whois', domain)
@@ -107,7 +123,7 @@ class DomainExpiryChecker
   def output_results
     # Sort by expiry date (nil values at the end)
     sorted_results = @results.sort_by do |result|
-      result[:expiry_date] ? result[:expiry_date] : Date.new(9999, 12, 31)
+      result[:expiry_date] ? result[:expiry_date] : UNKNOWN_DATE_SENTINEL
     end
 
     # Output tab-separated results
@@ -124,8 +140,8 @@ if __FILE__ == $PROGRAM_NAME
   domains = []
 
   if ARGV.empty?
-    # Read from stdin
-    domains = $stdin.readlines.map(&:strip)
+    # Read from stdin line by line (memory efficient)
+    domains = $stdin.each_line.map(&:strip)
   elsif ARGV[0] == '-h' || ARGV[0] == '--help'
     puts "Usage: #{$PROGRAM_NAME} [domains_file]"
     puts
@@ -144,13 +160,13 @@ if __FILE__ == $PROGRAM_NAME
     puts "  cat domains.txt | #{$PROGRAM_NAME}"
     exit 0
   else
-    # Read from file
+    # Read from file line by line (memory efficient)
     filename = ARGV[0]
     unless File.exist?(filename)
       warn "Error: File '#{filename}' not found"
       exit 1
     end
-    domains = File.readlines(filename).map(&:strip)
+    domains = File.foreach(filename).map(&:strip)
   end
 
   if domains.empty?
